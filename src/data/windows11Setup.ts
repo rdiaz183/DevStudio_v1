@@ -18,7 +18,7 @@ chcp 65001 >nul
 echo ===============================================================================
 echo   ____             ____  _             _ _         _    ___ 
 echo  ^|  _ \  _____   ^/ ___^|^| ^|_ _   _  __^| (_) ___   ^/ \  ^|_ _^|
-echo  ^| ^| ^| ^|/ _ \ \ / /\___ \^| __^| ^| ^| ^|/ _^` ^| ^|/ _ \ ^/ _ \  ^| ^| 
+echo  ^| ^| ^| ^|/ _ \ \ / /\___ \^| __^| ^| ^| ^|/ _^\` ^| ^|/ _ \ ^/ _ \  ^| ^| 
 echo  ^| ^|_^| ^|  __/\ V /  ___^) ^| ^|_^| ^|_^| ^| ^(_^| ^| ^| ^(_) ^/ ___ \ ^| ^| 
 echo  ^|____/ \___^| \_/  ^|____/ \__^|\__,_^|\__,_^|_^|\___^/_^/   \_\___^|
 echo.
@@ -119,6 +119,7 @@ echo Set oLink = oWS.CreateShortcut^(sLinkFile^)
 echo oLink.TargetPath = "%DEVSTUDIO_DIR%\\Launch_DevStudio.bat"
 echo oLink.WorkingDirectory = "%DEVSTUDIO_DIR%"
 echo oLink.Description = "Dev Studio AI - Windows 11 Workspace ^& Unreal Link"
+echo if exist "%DEVSTUDIO_DIR%\\icon.ico" oLink.IconLocation = "%DEVSTUDIO_DIR%\\icon.ico"
 echo oLink.Save
 ) > "%VBS_SCRIPT%"
 cscript //nologo "%VBS_SCRIPT%"
@@ -210,9 +211,11 @@ $Shortcut.TargetPath = "powershell.exe"
 $Shortcut.Arguments = "-NoExit -ExecutionPolicy Bypass -File \`"$WorkspaceDir\\Start-DevStudio.ps1\`""
 $Shortcut.WorkingDirectory = $WorkspaceDir
 $Shortcut.Description = "Dev Studio AI Suite with Unreal Engine 5.5 Link"
+$ShortcutIcon = Join-Path $WorkspaceDir "icon.ico"
+if (Test-Path $ShortcutIcon) { $Shortcut.IconLocation = $ShortcutIcon }
 $Shortcut.Save()
 
-Write-Host "`n[✓] Dev Studio AI setup completed successfully for Windows 11!" -ForegroundColor Green
+Write-Host "\`n[✓] Dev Studio AI setup completed successfully for Windows 11!" -ForegroundColor Green
 Write-Host "  -> Desktop Shortcut: $ShortcutPath" -ForegroundColor Cyan
 Write-Host "  -> Workspace Folder:  $WorkspaceDir" -ForegroundColor Cyan
 `;
