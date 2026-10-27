@@ -1,0 +1,6 @@
+{
+  "name": "Dev Studio v1 - Proprietary AI Game Studio",
+  "description": "Standalone proprietary AI game development platform, reverse-engineering engine, multi-agent orchestration, and DCC pipeline tailored for 16TB SSD and 6.0 GB VRAM optimization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

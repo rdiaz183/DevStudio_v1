@@ -1,0 +1,9 @@
+Dev Studio Features
+Dev Studio Features
+• Interface: Gemini-like chat interface with Dark Mode.
+• Agent Creator: Generate specialized AI agents via text prompts.
+• API Management: Dashboard for connecting and distributing keys.
+• Notebook: Shared section for uploading files and data as agent references.
+• Cross-Platform: App support and web access for traveling.
+• Project Organization: Asset Library, Prompt Manager, and Version Control.
+• Docker Integration: Dropdown feature for managing modular Docker nodes and resources.
