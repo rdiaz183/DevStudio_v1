@@ -1,0 +1,13 @@
+{
+  "deck_name": "Deck_Alpha",
+  "cards": [
+    {
+      "card_id": "C_001",
+      "card_name": "Sovereign Sentinel",
+      "cost": 4,
+      "attack": 6,
+      "defense": 5,
+      "artwork_path": "/Game/Code510/Textures/T_Card_Sentinel_BC"
+    }
+  ]
+}

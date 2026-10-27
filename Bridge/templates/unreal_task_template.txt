@@ -1,0 +1,5 @@
+[Code510 Sovereign Directive]
+Task Name: {TASK_NAME}
+Target Subsystem: EditorActorSubsystem
+Parameters: {TASK_PARAMS}
+Execution Mode: Automated Queue

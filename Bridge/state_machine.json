@@ -1,0 +1,13 @@
+{
+    "call_stack": [],
+    "parameters": [],
+    "required_parameters": [],
+    "required_parameters_version": 1,
+    "user_parameters": {},
+    "user_parameters_version": 1,
+    "type": "command",
+    "version": 1,
+    "timestamp": "2026-10-24 12:29:40",
+    "last_simulated_action": "Director_Sovereign:Initialize_Module_State",
+    "simulation_status": "Committed"
+}

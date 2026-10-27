@@ -1,0 +1,5 @@
+﻿{
+    "project": "Code510 / Dev Studio TCG Engine",
+    "core_mechanics": "Rank 0 Suite, Dice Energy, Commander Progression",
+    "balance_rules": "No infinite mana loops, strict card cost bounds (1-10)"
+}

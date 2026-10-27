@@ -1,0 +1,10 @@
+{
+    "title": "Dev Studio Architecture",
+    "content": "Built standalone Python/FastAPI backend with encryption vault and autonomous agent loops.",
+    "tags": [
+        "architecture",
+        "backend",
+        "local-ai"
+    ],
+    "created_at": "2026-10-26T11:01:37.663587"
+}

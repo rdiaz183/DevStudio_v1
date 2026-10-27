@@ -1,0 +1,53 @@
+﻿{
+    "call_stack":  [
+                       {
+                           "timestamp":  "2026-09-21 08:20:34",
+                           "name":  "voice_memo_task",
+                           "parameters":  [
+                                              {
+                                                  "prompt":  null
+                                              }
+                                          ]
+                       },
+                       {
+                           "timestamp":  "2026-09-21 08:21:33",
+                           "name":  "voice_memo_task",
+                           "parameters":  [
+                                              {
+                                                  "prompt":  "Spawn a test sphere at origin via voice hook"
+                                              }
+                                          ]
+                       },
+                       {
+                           "timestamp":  "2026-09-21 09:13:36",
+                           "name":  "spawn_card_mesh",
+                           "parameters":  {
+                                              "card_id":  "C_001",
+                                              "cost":  4,
+                                              "attack":  6,
+                                              "card_name":  "Sovereign Sentinel",
+                                              "artwork_path":  "/Game/Code510/Textures/T_Card_Sentinel_BC",
+                                              "defense":  5
+                                          }
+                       },
+                       {
+                           "timestamp":  "2026-09-21 09:14:04",
+                           "name":  "spawn_card_mesh",
+                           "parameters":  {
+                                              "card_id":  "C_001",
+                                              "cost":  4,
+                                              "attack":  6,
+                                              "card_name":  "Sovereign Sentinel",
+                                              "artwork_path":  "/Game/Code510/Textures/T_Card_Sentinel_BC",
+                                              "defense":  5
+                                          }
+                       },
+                       {
+                           "timestamp":  "2026-09-21 09:20:26",
+                           "name":  "vs_build_success",
+                           "parameters":  {
+                                              "solution":  "C:\\Users\\rdiaz\\Documents\\Unreal Projects\\test\\Automation_test.sln"
+                                          }
+                       }
+                   ]
+}

@@ -1,0 +1,6 @@
+@echo off
+cd /d "C:\Users\rdiaz\Documents\Unreal Projects\Code510_AI_Workspace"
+echo Starting Code510 Autonomous Daemons...
+start /B powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "Bridge\asset_pipeline\asset_pipeline_daemon.ps1"
+echo Daemons successfully initialized in the background.
+exit
