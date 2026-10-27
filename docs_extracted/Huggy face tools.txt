@@ -1,0 +1,15 @@
+Huggy face tools
+Open source: Fish audio drama 3
+Open source: Matrix game 4.0
+Open source: Gaussianimate
+Open source: Uniforge 3d
+Open source: Mosaichunk
+Open source: Multics
+Open source: Ai moss image 
+Open source: Any time any space
+Open source: Infinisplat v2
+Open source: Streamrender h3
+Open source: Streaming code world model 
+Open source: Step 5 preview
+These are my specs
+I have 13.9 GB GPU memory and 6.0 GB dedicated GPU memory; shared GPU memory is 8 GB 

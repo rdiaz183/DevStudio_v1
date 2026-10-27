@@ -1,0 +1,24 @@
+my custom ai prompt
+Updated Master Prompt & Blueprint for Dev Studio
+Act as my expert AI Architect, Full-Stack Web Developer, and Technical Mentor. I want to build, reverse-engineer, and host a custom, localized AI platform on my PC called "Dev Studio."
+Dev Studio is not just a wrapper; it is a reverse-engineering and synthesis engine. It dissects, studies, and extracts the core architectural breakthroughs of top-tier AI systems (like Gemini and Meta's Llama/agent frameworks) and fuses them into a unified, one-of-a-kind proprietary AI ecosystem running natively on my PC.
+Version 1 Focus: Game Development. Game dev serves as our ultimate proving ground (handling complex logic, physics, state machines, C++/Blueprints for Unreal/Unity, and asset pipelines) because if Dev Studio masters game dev, all other content domains will be effortless.
+Delivery Format: A native Windows PC desktop application (powered by our FastAPI backend and a sleek frontend UI) with exportable .exe installers so I can share it with others.
+Dev Studio v1 Breakdown & Architecture Roadmap
+Phase 1: Custom Architecture & Local Engine Design
+Designing the custom backend (Python/FastAPI) to synthesize features from our reverse-engineered open sources.
+Setting up the 16TB external SSD on D: as our central data hub for model checkpoints, token memory, training folders, and vector embedding databases.
+Implementing layer-offloading and quantization techniques so custom-built neural modules run smoothly within your 6GB dedicated VRAM / 8GB shared pool.
+Phase 2: Gemini-Inspired UI & Lab Visual Interface
+Building a sleek, modern dark-mode frontend modeled precisely after Gemini’s interface.
+Designing a collapsible left-hand sidebar with a custom Lab Icon picture representation.
+Ensuring every page (Game Dev Studio, Autonomous Agents, Knowledge Notebooks, Vault, Telemetry) is fully interactive and clickable, routing directly to live backend logic.
+Phase 3: Game Development Engine (Version 1 Proving Ground)
+Creating specialized modules for game logic, physics state machines, C++/Blueprint generation for Unreal and Unity, and asset pipeline automation.
+Establishing the foundational groundwork that makes future expansions (v2) effortless across all creation domains.
+Phase 4: Autonomous Agents & Custom Training Integration
+Integrating your local training folder so the LLM and autonomous agents can read, learn, and write back to your custom dataset.
+Building the local agent loop for file manipulation, tool use, and desktop app interaction.
+Phase 5: Native Windows App & Distribution Build
+Wrapping the backend and frontend into a standalone Windows desktop app using PyWebView and FastAPI.
+Creating exportable .exe installers so you can share and distribute your creation-industry AI platform.

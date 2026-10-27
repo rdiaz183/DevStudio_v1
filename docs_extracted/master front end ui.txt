@@ -1,0 +1,38 @@
+master front end ui
+Master Verification & Dropdown Architecture Check
+Workspace Category & Sub-Menu
+Dropdown & Interactive Capabilities
+Verification & Source Status
+1. Chat & Studio Control
+• Active Sessions & Agent Threads
+• Studio Canvas (Split-Screen Preview)
+• Model Control Panel (VRAM Allocation & 4-bit/8-bit Quantization)
+Verified: FastAPI backend routes and local GGUF/AWQ model manager configured.
+2. Agent Creator & Orchestration
+• Visual Builder & Prompt-Driven Agent Creation
+• 24-Agent Roster Registry
+• Local OS Execution & Tool Looping
+Verified: Local agent key generator and prompt execution loops initialized.
+3. Knowledge Notebooks
+• Project Spaces (New York Racing World Specs)
+• Vector Embedding Hub (Local PDF/Code Ingestion)
+• Auto-Synthesis Markdown Summarizer
+Verified: Workspace knowledge directory mapped to D:\DevStudio_v1_Workspace.
+4. Asset Library & Vault
+• Prompt & Model Manager
+• Secrets Vault: External API keys & fallback routing
+• Export Hub (.exe & Zip packaging)
+Verified: Local .env vault and packaging configuration scripts in place.
+5. Docker & Resource Management
+• Local Container Nodes (Open WebUI & Ollama)
+• API Offload Settings & Local/External Routing
+• Strict VRAM Allocator: Locked under 6.0 GB VRAM
+Verified: Docker Compose config and hardware monitoring scripts aligned.
+6. System Settings & Security
+• Local Directory Pointers (D:\ Drive root)
+• Authentication & Security: Local SHA256 password hashing & offline email verification tokens
+• Phone-to-AI Pairing: Local Wi-Fi QR token sync
+Verified: Security and local tunnel configuration files active.
+7. Lighting & Weather AI
+• IC-Light Neural Relighting: Open-source lighting & illumination module cloned & configured
+• Procedural Weather AI: Real-time rain, surface wetness, & atmospheric sky generator

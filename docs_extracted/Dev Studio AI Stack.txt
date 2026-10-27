@@ -1,0 +1,13 @@
+Dev Studio AI Stack
+Dev Studio AI Stack
+Audio Generation Layer
+• Fish Audio Drama 3: A mixture-of-experts model for cloning voices and generating multi-character, emotional dialogue with direction tags. (https://huggingface.co/fishaudio/drama-3)
+World Mapping Layer
+• UniForge3D & InfiniSplat v2: Combined for 3D reconstruction, point-map mapping, and fast Gaussian splatting from arbitrary views.
+Animation Layer
+• Gaussianimate: A 4D rigging and motion-matching framework forAnimating non-rigid dynamics.
+Visual & Measurement Layer
+• Depth Anything V3: Mapping complex environments and extracting accurate depth readings.
+• MapAnything: Unified Transformer for diverse 3D reconstruction tasks and metrics.
+Rendering System
+• Streamrender H3 & AudioLDM: Real-time diffusion rendering for code-driven worlds and immersive soundscapes.
