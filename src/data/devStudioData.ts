@@ -27,7 +27,7 @@ export interface InventoryTool {
 export interface NotebookFile {
   id: string;
   name: string;
-  category: 'Audio' | 'Code' | 'Document' | 'Specs' | 'Voice Note';
+  category: 'Audio' | 'Code' | 'Document' | 'Specs' | 'Voice Note' | '3D Assets' | 'Video' | 'Textures' | 'Archives' | 'Other';
   fileSizeKB: number;
   dateAdded: string;
   timestampMs: number;

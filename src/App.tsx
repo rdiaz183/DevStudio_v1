@@ -66,8 +66,21 @@ import {
   Globe,
   Database,
   ShieldCheck,
-  Scissors
+  Scissors,
+  PanelLeft,
+  PanelLeftClose,
+  Film,
+  Camera,
+  Bookmark
 } from 'lucide-react';
+import { CinematicDirectorStudio } from './components/CinematicDirectorStudio';
+import { MusicGenStudio } from './components/MusicGenStudio';
+import {
+  PitchPresetManager,
+  PitchCharacterPreset,
+  OctaveLeapSettings,
+  DEFAULT_PITCH_PRESETS
+} from './components/PitchPresetManager';
 import {
   FULL_40_AGENTS,
   OPEN_SOURCE_INVENTORY,
@@ -109,6 +122,10 @@ import {
 
 type ActiveTab = 
   | 'chat-studio'
+  | 'cinematics'
+  | 'cinematic-studio'
+  | 'musicgen'
+  | 'musicgen-studio'
   | 'agent-creator'
   | 'notebooks'
   | 'voice-audio'
@@ -222,6 +239,45 @@ function RealtimeFrequencyVisualizer({
   const [displayMode, setDisplayMode] = useState<'combined' | 'bars' | 'spline'>('combined');
   const [isMuted, setIsMuted] = useState(false);
   const [isLooping, setIsLooping] = useState(true);
+  // Visual Pitch Tracking (F0 Deviation) Overlay State
+  const [showPitchOverlay, setShowPitchOverlay] = useState<boolean>(true);
+  const [pitchToleranceCents, setPitchToleranceCents] = useState<number>(25);
+  // Pitch Range Filter & Octave-Leap Masking State (e.g. C2-C4)
+  const [enablePitchRangeFilter, setEnablePitchRangeFilter] = useState<boolean>(true);
+  const [pitchRangeMinMidi, setPitchRangeMinMidi] = useState<number>(36); // C2 (65.4 Hz)
+  const [pitchRangeMaxMidi, setPitchRangeMaxMidi] = useState<number>(60); // C4 (261.6 Hz)
+  const [simulateOctaveGlitch, setSimulateOctaveGlitch] = useState<boolean>(false);
+  const [isRangeFilterSettingsOpen, setIsRangeFilterSettingsOpen] = useState<boolean>(false);
+  const [octaveLeapsCount, setOctaveLeapsCount] = useState<number>(0);
+
+  // Pitch Preset Manager Sidebar & Character Voice Matrix State
+  const [isPitchPresetSidebarOpen, setIsPitchPresetSidebarOpen] = useState<boolean>(false);
+  const [activePitchPresetId, setActivePitchPresetId] = useState<string>('preset-baritone-lead');
+  const [activePitchPresetName, setActivePitchPresetName] = useState<string>('Baritone Lead');
+  const [octaveLeapSettings, setOctaveLeapSettings] = useState<OctaveLeapSettings>({
+    leapThresholdSemitones: 12,
+    sensitivity: 7,
+    debounceMs: 45,
+    correctionMode: 'flag-only',
+    toleranceCents: 25
+  });
+
+  const midiToFreq = (midi: number) => 440 * Math.pow(2, (midi - 69) / 12);
+  const midiToNoteName = (midi: number) => {
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const octave = Math.floor(midi / 12) - 1;
+    const note = noteNames[(midi % 12 + 12) % 12];
+    return `${note}${octave}`;
+  };
+
+  const pitchHistoryRef = useRef<Array<{ pct: number; f0: number; targetF0: number; devCents: number; isMasked?: boolean }>>([]);
+  const wasOutsideRef = useRef<boolean>(false);
+  const [pitchStabilityStats, setPitchStabilityStats] = useState({
+    stabilityPct: 98.2,
+    deviationCents: 1.8,
+    vibratoHz: 5.2,
+    status: 'Stable Intonation'
+  });
   const [liveMetrics, setLiveMetrics] = useState({
     fundamentalHz: 125,
     musicalNote: 'B2',
@@ -586,6 +642,393 @@ function RealtimeFrequencyVisualizer({
         ctx.stroke();
       }
 
+      // Visual Pitch-Tracking Overlay (Fundamental Frequency F0 Deviation over Time)
+      if (showPitchOverlay) {
+        const baseFreq = getActorBaseFreq(selectedTake.actor);
+        const pitchMod = Math.pow(2, (voicePitchSemitones + selectedTake.pitch) / 12);
+        const targetF0 = Math.max(30, Math.min(2000, baseFreq * pitchMod));
+
+        // Compute instantaneous natural vocal intonation & vibrato
+        const vibratoHz = 5.3;
+        const vibratoCents = isPlaying ? Math.sin(now * 0.001 * vibratoHz * 2 * Math.PI) * 13.5 : 0;
+        const speechInflection = isPlaying ? Math.sin((playheadProgress / 100) * Math.PI * 4.4) * 8.5 + Math.cos(now * 0.0021) * 2.8 : 0;
+        
+        // Simulating octave-leap tracking artifact or vocal break if enabled
+        let octaveGlitchOffsetCents = 0;
+        if (simulateOctaveGlitch && isPlaying) {
+          const modPhase = (playheadProgress * 1.6) % 100;
+          if (modPhase >= 25 && modPhase <= 55) {
+            // An abrupt +1200 cents (+1 full octave leap) vocal crack / octave tracking artifact
+            octaveGlitchOffsetCents = 1200 + Math.sin(now * 0.006) * 60;
+          }
+        }
+
+        const instDevCents = vibratoCents + speechInflection + octaveGlitchOffsetCents;
+        const instF0 = targetF0 * Math.pow(2, instDevCents / 1200);
+
+        const filterMinHz = midiToFreq(pitchRangeMinMidi);
+        const filterMaxHz = midiToFreq(pitchRangeMaxMidi);
+
+        // Character preset octave-leap sensitivity matrix
+        const semitoneThreshold = octaveLeapSettings?.leapThresholdSemitones ?? 12;
+        const sensScale = 1 - ((octaveLeapSettings?.sensitivity ?? 7) - 1) * 0.04; // 1.0 down to 0.64
+        const leapCentsCutoff = semitoneThreshold * 100 * sensScale;
+        const isLeapDetected = Math.abs(instDevCents) >= leapCentsCutoff;
+
+        const isOutsidePitchRange = enablePitchRangeFilter && (
+          instF0 < filterMinHz - 0.5 ||
+          instF0 > filterMaxHz + 0.5 ||
+          isLeapDetected
+        );
+
+        // Determine plotted values based on character preset correction mode
+        let plottedDevCents = instDevCents;
+        let plottedF0 = instF0;
+
+        if (isOutsidePitchRange) {
+          if (octaveLeapSettings?.correctionMode === 'snap-to-octave') {
+            // Fold abrupt octave jump back into character's natural passband
+            if (instDevCents > leapCentsCutoff * 0.7) {
+              plottedDevCents = instDevCents - 1200;
+            } else if (instDevCents < -leapCentsCutoff * 0.7) {
+              plottedDevCents = instDevCents + 1200;
+            }
+            plottedF0 = targetF0 * Math.pow(2, plottedDevCents / 1200);
+          } else if (octaveLeapSettings?.correctionMode === 'suppress') {
+            // Attenuate leap artifact
+            plottedDevCents = Math.sign(instDevCents) * Math.min(Math.abs(instDevCents), pitchToleranceCents);
+            plottedF0 = targetF0 * Math.pow(2, plottedDevCents / 1200);
+          }
+        }
+
+        // Update octave leap state counter cleanly
+        if (isOutsidePitchRange && !wasOutsideRef.current) {
+          wasOutsideRef.current = true;
+          setOctaveLeapsCount(c => c + 1);
+        } else if (!isOutsidePitchRange && wasOutsideRef.current) {
+          wasOutsideRef.current = false;
+        }
+
+        // Record pitch tracking history point aligned with playhead
+        if (isPlaying) {
+          if (playheadProgress < 2 && pitchHistoryRef.current.length > 25) {
+            pitchHistoryRef.current = [];
+          }
+          pitchHistoryRef.current.push({
+            pct: playheadProgress,
+            f0: plottedF0,
+            targetF0,
+            devCents: plottedDevCents,
+            isMasked: isOutsidePitchRange
+          });
+          if (pitchHistoryRef.current.length > 320) {
+            pitchHistoryRef.current.shift();
+          }
+        }
+
+        // Overlay Ribbon Dimensions (Top Lane)
+        const laneX = 36;
+        const laneW = barAreaWidth;
+        const laneTop = 10;
+        const laneH = 64;
+        const laneBottom = laneTop + laneH;
+        const laneCenterY = laneTop + laneH / 2;
+        const maxCentsRange = 50; // ±50 cents scale
+
+        ctx.save();
+
+        // Lane Frosted Glass Background
+        ctx.fillStyle = themeMode === 'light' ? 'rgba(241, 245, 249, 0.88)' : 'rgba(8, 12, 22, 0.86)';
+        ctx.strokeStyle = themeMode === 'light' ? 'rgba(6, 182, 212, 0.35)' : 'rgba(6, 182, 212, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(laneX, laneTop, laneW, laneH, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        // Shaded Vocal Pitch Stability Tolerance Zone (e.g. ±pitchToleranceCents)
+        const tolRatio = Math.min(1, pitchToleranceCents / maxCentsRange);
+        const tolHalfH = (laneH / 2 - 4) * tolRatio;
+        ctx.fillStyle = themeMode === 'light' ? 'rgba(16, 185, 129, 0.16)' : 'rgba(16, 185, 129, 0.13)';
+        ctx.fillRect(laneX + 1, laneCenterY - tolHalfH, laneW - 2, tolHalfH * 2);
+
+        // Tolerance corridor boundary dashed lines
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(laneX, laneCenterY - tolHalfH);
+        ctx.lineTo(laneX + laneW, laneCenterY - tolHalfH);
+        ctx.moveTo(laneX, laneCenterY + tolHalfH);
+        ctx.lineTo(laneX + laneW, laneCenterY + tolHalfH);
+        ctx.stroke();
+
+        // Center Baseline (0 Cents Deviation / Target F0)
+        ctx.setLineDash([4, 2]);
+        ctx.strokeStyle = '#06b6d4';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(laneX, laneCenterY);
+        ctx.lineTo(laneX + laneW, laneCenterY);
+        ctx.stroke();
+        ctx.setLineDash([]); // Reset line dash
+
+        // Draw Musical Pitch Range Masks & Octave-Leap Danger Zones
+        if (enablePitchRangeFilter) {
+          // Visual Mask for Upper Frequencies (Notes > Max MIDI, e.g. > C4)
+          const maskCeilingH = 17;
+          ctx.save();
+          ctx.fillStyle = themeMode === 'light' ? 'rgba(239, 68, 68, 0.16)' : 'rgba(239, 68, 68, 0.22)';
+          ctx.beginPath();
+          ctx.roundRect(laneX + 1, laneTop + 1, laneW - 2, maskCeilingH, [7, 7, 0, 0]);
+          ctx.fill();
+
+          // Diagonal Hazard Stripes in Ceiling Mask
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.32)';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          for (let sx = laneX - maskCeilingH; sx < laneX + laneW; sx += 14) {
+            ctx.moveTo(Math.max(laneX + 1, sx), laneTop + 1);
+            ctx.lineTo(Math.min(laneX + laneW - 1, sx + maskCeilingH), laneTop + 1 + maskCeilingH);
+          }
+          ctx.stroke();
+
+          // Ceiling Boundary Line
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.85)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(laneX + 1, laneTop + maskCeilingH);
+          ctx.lineTo(laneX + laneW - 1, laneTop + maskCeilingH);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Ceiling Mask Label
+          ctx.font = 'bold 8px monospace';
+          ctx.fillStyle = '#f87171';
+          ctx.textAlign = 'left';
+          ctx.fillText(`⛔ MASKED CEILING [> ${midiToNoteName(pitchRangeMaxMidi)} (${filterMaxHz.toFixed(0)}Hz)] · OCTAVE LEAP ZONE`, laneX + 6, laneTop + 12);
+
+          // Visual Mask for Lower Frequencies (Notes < Min MIDI, e.g. < C2)
+          const maskFloorH = 17;
+          const maskFloorY = laneBottom - maskFloorH;
+          ctx.fillStyle = themeMode === 'light' ? 'rgba(239, 68, 68, 0.16)' : 'rgba(239, 68, 68, 0.22)';
+          ctx.beginPath();
+          ctx.roundRect(laneX + 1, maskFloorY, laneW - 2, maskFloorH, [0, 0, 7, 7]);
+          ctx.fill();
+
+          // Diagonal Hazard Stripes in Floor Mask
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.32)';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          for (let sx = laneX - maskFloorH; sx < laneX + laneW; sx += 14) {
+            ctx.moveTo(Math.max(laneX + 1, sx), maskFloorY);
+            ctx.lineTo(Math.min(laneX + laneW - 1, sx + maskFloorH), laneBottom - 1);
+          }
+          ctx.stroke();
+
+          // Floor Boundary Line
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.85)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(laneX + 1, maskFloorY);
+          ctx.lineTo(laneX + laneW - 1, maskFloorY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Floor Mask Label
+          ctx.font = 'bold 8px monospace';
+          ctx.fillStyle = '#f87171';
+          ctx.textAlign = 'left';
+          ctx.fillText(`⛔ MASKED FLOOR [< ${midiToNoteName(pitchRangeMinMidi)} (${filterMinHz.toFixed(0)}Hz)] · SUB-OCTAVE ZONE`, laneX + 6, laneBottom - 5);
+
+          // Allowed Passband Corridor Indicator
+          ctx.textAlign = 'right';
+          ctx.font = '8px monospace';
+          ctx.fillStyle = '#10b981';
+          ctx.fillText(`FILTER PASSBAND: ${midiToNoteName(pitchRangeMinMidi)}–${midiToNoteName(pitchRangeMaxMidi)}`, laneX + laneW - 6, laneCenterY + 14);
+          ctx.restore();
+        }
+
+        // Graticule Labels & Scale
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#06b6d4';
+        ctx.fillText(`F0: ${targetF0.toFixed(1)}Hz (0¢ · ${getNoteName(targetF0)})`, laneX + 6, laneCenterY - 3);
+
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.6)';
+        ctx.textAlign = 'right';
+        ctx.fillText(`+${maxCentsRange}¢ Sharp`, laneX + laneW - 6, laneTop + 10);
+        ctx.fillText(`-${maxCentsRange}¢ Flat`, laneX + laneW - 6, laneBottom - 4);
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.85)';
+        ctx.fillText(`±${pitchToleranceCents}¢ Stability Corridor`, laneX + laneW - 6, laneCenterY - 3);
+
+        // Draw Historical Pitch Trajectory (F0 Deviation Curve)
+        const history = pitchHistoryRef.current;
+        if (history.length > 1) {
+          ctx.beginPath();
+          let started = false;
+          for (let i = 0; i < history.length; i++) {
+            const pt = history[i];
+            const px = laneX + (pt.pct / 100) * laneW;
+            const clampedDev = Math.max(-maxCentsRange, Math.min(maxCentsRange, pt.devCents));
+            const py = laneCenterY - (clampedDev / maxCentsRange) * (laneH / 2 - 6);
+            if (!started) {
+              ctx.moveTo(px, py);
+              started = true;
+            } else {
+              ctx.lineTo(px, py);
+            }
+          }
+
+          // Dynamic Neon Gradient based on overall stability
+          const absDev = Math.abs(instDevCents);
+          ctx.lineWidth = 2.5;
+          ctx.shadowBlur = 6;
+          if (isOutsidePitchRange) {
+            ctx.strokeStyle = '#ef4444'; // Flashing Danger Crimson for Octave Leap
+            ctx.shadowColor = '#ef4444';
+          } else if (absDev <= 15) {
+            ctx.strokeStyle = '#10b981'; // Rock-Solid Emerald
+            ctx.shadowColor = '#10b981';
+          } else if (absDev <= 30) {
+            ctx.strokeStyle = '#06b6d4'; // Stable Cyan
+            ctx.shadowColor = '#06b6d4';
+          } else if (absDev <= 45) {
+            ctx.strokeStyle = '#f59e0b'; // Amber Drift
+            ctx.shadowColor = '#f59e0b';
+          } else {
+            ctx.strokeStyle = '#f43f5e'; // Rose Warning
+            ctx.shadowColor = '#f43f5e';
+          }
+          ctx.stroke();
+          ctx.shadowBlur = 0; // Reset shadow
+
+          // Highlight Masked Points with Warning Glow Dots
+          for (let i = 0; i < history.length; i += 2) {
+            const pt = history[i];
+            if (pt.isMasked) {
+              const px = laneX + (pt.pct / 100) * laneW;
+              const clampedDev = Math.max(-maxCentsRange, Math.min(maxCentsRange, pt.devCents));
+              const py = laneCenterY - (clampedDev / maxCentsRange) * (laneH / 2 - 6);
+              ctx.beginPath();
+              ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+              ctx.fillStyle = '#ef4444';
+              ctx.fill();
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 1;
+              ctx.stroke();
+            }
+          }
+        }
+
+        // Live Reticle & Playhead Cursor
+        const curX = laneX + (playheadProgress / 100) * laneW;
+        const curClampedDev = Math.max(-maxCentsRange, Math.min(maxCentsRange, instDevCents));
+        const curY = laneCenterY - (curClampedDev / maxCentsRange) * (laneH / 2 - 6);
+
+        // Vertical Guide Needle
+        ctx.strokeStyle = isOutsidePitchRange ? 'rgba(239, 68, 68, 0.8)' : 'rgba(6, 182, 212, 0.55)';
+        ctx.lineWidth = isOutsidePitchRange ? 1.5 : 1;
+        ctx.beginPath();
+        ctx.moveTo(curX, laneTop);
+        ctx.lineTo(curX, laneBottom);
+        ctx.stroke();
+
+        // Pulsing Target Reticle
+        const pulse = Math.sin(now * 0.008) * 2;
+        ctx.beginPath();
+        ctx.arc(curX, curY, (isOutsidePitchRange ? 6 : 4.5) + pulse, 0, Math.PI * 2);
+        ctx.fillStyle = isOutsidePitchRange ? '#ef4444' : (Math.abs(instDevCents) <= pitchToleranceCents ? '#10b981' : '#f59e0b');
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        if (isOutsidePitchRange) {
+          // Shockwave ripple ring around out-of-range reticle
+          ctx.beginPath();
+          ctx.arc(curX, curY, 9 + pulse * 2, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        }
+
+        // Live Deviation Badge Floating Tooltip
+        const badgeText = isOutsidePitchRange
+          ? `⚠️ OCTAVE LEAP! ${getNoteName(instF0)} (${instF0.toFixed(1)}Hz) [OUT OF ${midiToNoteName(pitchRangeMinMidi)}–${midiToNoteName(pitchRangeMaxMidi)}]`
+          : `${instDevCents >= 0 ? '+' : ''}${instDevCents.toFixed(1)}¢ · ${instF0.toFixed(1)}Hz`;
+        ctx.font = 'bold 9px monospace';
+        const textWidth = ctx.measureText(badgeText).width;
+        const badgeX = Math.max(laneX + 4, Math.min(laneX + laneW - textWidth - 14, curX - textWidth / 2 - 4));
+        const badgeY = curY > laneCenterY ? curY - 14 : curY + 16;
+
+        ctx.fillStyle = isOutsidePitchRange ? 'rgba(127, 29, 29, 0.95)' : 'rgba(15, 23, 42, 0.9)';
+        ctx.strokeStyle = isOutsidePitchRange ? '#ef4444' : (Math.abs(instDevCents) <= pitchToleranceCents ? '#10b981' : '#f59e0b');
+        ctx.lineWidth = isOutsidePitchRange ? 1.5 : 1;
+        ctx.beginPath();
+        ctx.roundRect(badgeX, badgeY - 9, textWidth + 8, 14, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'left';
+        ctx.fillText(badgeText, badgeX + 4, badgeY);
+
+        // Mini Intonation Stability Gauge HUD (Top Left Corner of Lane)
+        const hudX = laneX + 8;
+        const hudY = laneTop + 6;
+        const isAlert = isOutsidePitchRange;
+        ctx.fillStyle = isAlert ? 'rgba(239, 68, 68, 0.35)' : 'rgba(6, 182, 212, 0.2)';
+        ctx.fillRect(hudX, hudY, 156, 16);
+        ctx.strokeStyle = isAlert ? '#ef4444' : 'rgba(6, 182, 212, 0.4)';
+        ctx.strokeRect(hudX, hudY, 156, 16);
+
+        ctx.font = 'bold 8px monospace';
+        ctx.fillStyle = isAlert ? '#fca5a5' : '#22d3ee';
+        ctx.fillText(isAlert ? '⚡ OCTAVE LEAP DETECTED' : 'F0 PITCH TRACKER', hudX + 4, hudY + 11);
+
+        const stabScore = isAlert ? 38.5 : Math.max(88, Math.min(99.9, 100 - Math.abs(instDevCents) * 0.45));
+        ctx.textAlign = 'right';
+        ctx.fillStyle = isAlert ? '#ef4444' : '#10b981';
+        ctx.fillText(isAlert ? 'MASKED ARTIFACT' : `${stabScore.toFixed(1)}% STABLE`, hudX + 152, hudY + 11);
+
+        ctx.restore();
+      }
+
+      // Visual Masking on Main Spectrum Canvas (Behind/Over Bars)
+      if (enablePitchRangeFilter) {
+        const filterMinHz = midiToFreq(pitchRangeMinMidi);
+        const filterMaxHz = midiToFreq(pitchRangeMaxMidi);
+        const minFreqX = 36 + (Math.log10(Math.max(20, filterMinHz)) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20)) * barAreaWidth;
+        const maxFreqX = 36 + (Math.log10(Math.min(20000, filterMaxHz)) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20)) * barAreaWidth;
+
+        ctx.save();
+        // Lower masked band on RTA spectrum
+        if (minFreqX > 36) {
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+          ctx.fillRect(36, 80, minFreqX - 36, height - 90);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+          ctx.setLineDash([2, 4]);
+          ctx.beginPath();
+          ctx.moveTo(minFreqX, 80);
+          ctx.lineTo(minFreqX, height - 10);
+          ctx.stroke();
+        }
+        // Upper masked band on RTA spectrum
+        if (maxFreqX < 36 + barAreaWidth) {
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+          ctx.fillRect(maxFreqX, 80, (36 + barAreaWidth) - maxFreqX, height - 90);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+          ctx.setLineDash([2, 4]);
+          ctx.beginPath();
+          ctx.moveTo(maxFreqX, 80);
+          ctx.lineTo(maxFreqX, height - 10);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
       // Bottom Frequency Band Color Strip
       const subEndX = 36 + (Math.log10(60) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20)) * barAreaWidth;
       const bassEndX = 36 + (Math.log10(250) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20)) * barAreaWidth;
@@ -615,7 +1058,7 @@ function RealtimeFrequencyVisualizer({
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isPlaying, displayMode, selectedTake.duration, voiceSpeedRate, themeMode, isLooping]);
+  }, [isPlaying, displayMode, selectedTake.duration, voiceSpeedRate, themeMode, isLooping, showPitchOverlay, pitchToleranceCents, enablePitchRangeFilter, pitchRangeMinMidi, pitchRangeMaxMidi, simulateOctaveGlitch, voicePitchSemitones, selectedTake.pitch, selectedTake.actor, octaveLeapSettings]);
 
   return (
     <div className={`p-5 rounded-2xl border space-y-4 shadow-xl ${
@@ -677,8 +1120,306 @@ function RealtimeFrequencyVisualizer({
               </button>
             ))}
           </div>
+
+          {/* F0 Pitch Tracker Overlay Toggle */}
+          <div className="flex items-center gap-1.5 border border-cyan-500/30 rounded-xl p-1 bg-cyan-950/20">
+            <button
+              onClick={() => setShowPitchOverlay(!showPitchOverlay)}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                showPitchOverlay ? 'bg-cyan-600 text-white shadow' : 'opacity-60 hover:opacity-100 text-slate-300'
+              }`}
+              title="Toggle F0 Fundamental Frequency Pitch Deviation Overlay"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>{showPitchOverlay ? '✓ F0 Track' : 'F0 Track'}</span>
+            </button>
+
+            {showPitchOverlay && (
+              <select
+                value={pitchToleranceCents}
+                onChange={(e) => setPitchToleranceCents(Number(e.target.value))}
+                className="bg-slate-900 border border-slate-700 text-cyan-300 text-[10px] font-mono px-1.5 py-0.5 rounded focus:outline-none cursor-pointer"
+                title="Pitch Stability Tolerance Band"
+              >
+                <option value={15}>±15¢ (Tight)</option>
+                <option value={25}>±25¢ (Standard)</option>
+                <option value={50}>±50¢ (Wide)</option>
+              </select>
+            )}
+
+            {showPitchOverlay && (
+              <button
+                onClick={() => {
+                  pitchHistoryRef.current = [];
+                  showToast('Reset pitch tracking history');
+                }}
+                className="p-1 rounded hover:bg-white/10 opacity-60 hover:opacity-100 text-slate-300 cursor-pointer"
+                title="Clear pitch history"
+              >
+                <RotateCcw className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          {/* Pitch Range Filter & Octave Leap Masking Toggle */}
+          <div className="flex items-center gap-1.5 border border-rose-500/30 rounded-xl p-1 bg-rose-950/20">
+            <button
+              onClick={() => setIsRangeFilterSettingsOpen(!isRangeFilterSettingsOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                enablePitchRangeFilter
+                  ? 'bg-rose-600 text-white shadow'
+                  : 'opacity-60 hover:opacity-100 text-slate-300'
+              }`}
+              title="Configure Custom Pitch Range Filter (e.g. C2-C4) & Octave Leap Artifact Masking"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Range: {midiToNoteName(pitchRangeMinMidi)}–{midiToNoteName(pitchRangeMaxMidi)}</span>
+              <ChevronDown className={`w-3 h-3 transition-transform ${isRangeFilterSettingsOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {octaveLeapsCount > 0 && (
+              <span 
+                className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-red-500/90 text-white animate-pulse"
+                title={`${octaveLeapsCount} octave-leap artifacts detected outside ${midiToNoteName(pitchRangeMinMidi)}–${midiToNoteName(pitchRangeMaxMidi)}`}
+              >
+                ⚡ {octaveLeapsCount}
+              </span>
+            )}
+          </div>
+
+          {/* Character Pitch Preset Manager Sidebar Toggle */}
+          <div className="flex items-center gap-1.5 border border-indigo-500/30 rounded-xl p-1 bg-indigo-950/20">
+            <button
+              onClick={() => setIsPitchPresetSidebarOpen(prev => !prev)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                isPitchPresetSidebarOpen
+                  ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-[0_0_12px_rgba(99,102,241,0.5)]'
+                  : 'opacity-75 hover:opacity-100 text-indigo-300'
+              }`}
+              title="Open Pitch Preset Manager (Character Voice Ranges & Octave Sensitivity Matrix)"
+            >
+              <Bookmark className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Presets: <span className="font-bold text-white">{activePitchPresetName}</span></span>
+              <ChevronRight className={`w-3 h-3 transition-transform ${isPitchPresetSidebarOpen ? 'rotate-90' : ''}`} />
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Pitch Range Filter & Octave Leap Artifact Settings Panel */}
+      {isRangeFilterSettingsOpen && (
+        <div className={`p-4 rounded-xl border space-y-3.5 transition-all animate-in fade-in slide-in-from-top-2 duration-200 ${
+          themeMode === 'light' 
+            ? 'bg-rose-50/70 border-rose-200 text-slate-800' 
+            : 'bg-[#130d17]/80 border-rose-500/30 text-rose-100 shadow-[0_4px_20px_rgba(244,63,94,0.08)]'
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-rose-500/20 pb-2">
+            <div className="flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-rose-400" />
+              <span className="font-bold text-xs uppercase tracking-wider text-rose-400">
+                Custom Pitch Range Filter & Octave-Leap Masking
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                Artifact Guard
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={() => setIsPitchPresetSidebarOpen(true)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600/30 border border-indigo-500/50 text-indigo-200 hover:bg-indigo-600 hover:text-white text-[10px] font-semibold transition-all cursor-pointer shadow-sm"
+                title="Open Character Pitch Preset Manager Sidebar"
+              >
+                <Bookmark className="w-3 h-3 text-indigo-400" />
+                <span>Preset Manager</span>
+              </button>
+
+              <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                <input
+                  type="checkbox"
+                  checked={enablePitchRangeFilter}
+                  onChange={(e) => setEnablePitchRangeFilter(e.target.checked)}
+                  className="rounded border-rose-500/40 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                />
+                <span className="font-medium text-[11px]">Enable Visual Masking</span>
+              </label>
+
+              {octaveLeapsCount > 0 && (
+                <button
+                  onClick={() => {
+                    setOctaveLeapsCount(0);
+                    showToast('Octave leap counter reset to 0');
+                  }}
+                  className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 hover:bg-rose-900/60 cursor-pointer flex items-center gap-1"
+                >
+                  <RotateCcw className="w-2.5 h-2.5" />
+                  <span>Reset Leaps ({octaveLeapsCount})</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Dual Sliders: Min Note (Pitch Floor) & Max Note (Pitch Ceiling) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Min Note Slider */}
+            <div className="space-y-1.5 bg-black/20 p-2.5 rounded-lg border border-rose-500/20">
+              <div className="flex items-center justify-between text-[11px] font-mono">
+                <span className="text-slate-400 flex items-center gap-1">
+                  <span>Floor Cutoff (Min Note):</span>
+                </span>
+                <span className="font-bold text-rose-300 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-500/30">
+                  {midiToNoteName(pitchRangeMinMidi)} · {midiToFreq(pitchRangeMinMidi).toFixed(1)} Hz
+                </span>
+              </div>
+              <input
+                type="range"
+                min={24}
+                max={53}
+                step={1}
+                value={pitchRangeMinMidi}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setPitchRangeMinMidi(val);
+                }}
+                className="w-full accent-rose-500 h-1.5 bg-slate-700 rounded-lg cursor-pointer"
+              />
+              <div className="flex justify-between text-[9px] font-mono text-slate-500">
+                <span>C1 (32.7Hz)</span>
+                <span>C2 (65.4Hz)</span>
+                <span>C3 (130.8Hz)</span>
+                <span>F3 (174.6Hz)</span>
+              </div>
+            </div>
+
+            {/* Max Note Slider */}
+            <div className="space-y-1.5 bg-black/20 p-2.5 rounded-lg border border-rose-500/20">
+              <div className="flex items-center justify-between text-[11px] font-mono">
+                <span className="text-slate-400 flex items-center gap-1">
+                  <span>Ceiling Cutoff (Max Note):</span>
+                </span>
+                <span className="font-bold text-rose-300 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-500/30">
+                  {midiToNoteName(pitchRangeMaxMidi)} · {midiToFreq(pitchRangeMaxMidi).toFixed(1)} Hz
+                </span>
+              </div>
+              <input
+                type="range"
+                min={54}
+                max={84}
+                step={1}
+                value={pitchRangeMaxMidi}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setPitchRangeMaxMidi(val);
+                }}
+                className="w-full accent-rose-500 h-1.5 bg-slate-700 rounded-lg cursor-pointer"
+              />
+              <div className="flex justify-between text-[9px] font-mono text-slate-500">
+                <span>F#3 (185Hz)</span>
+                <span>C4 (261.6Hz)</span>
+                <span>C5 (523.3Hz)</span>
+                <span>C6 (1046.5Hz)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Interactive Musical Keyboard Range Preview Strip */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+              <span>Musical Keyboard Passband Alignment:</span>
+              <span className="text-emerald-400">Allowed Vocal Passband: {midiToNoteName(pitchRangeMinMidi)} ➔ {midiToNoteName(pitchRangeMaxMidi)}</span>
+            </div>
+            <div className="relative h-6 w-full rounded-md overflow-hidden bg-slate-900 border border-slate-700 flex text-[9px] font-mono select-none">
+              {/* Masked Lower Zone */}
+              <div 
+                className="h-full bg-rose-950/70 border-r border-rose-500/60 flex items-center justify-center text-rose-300/80 px-2 shrink-0 transition-all overflow-hidden relative"
+                style={{ width: `${Math.max(5, ((pitchRangeMinMidi - 24) / (84 - 24)) * 100)}%` }}
+              >
+                <div className="absolute inset-0 bg-[linear-gradient(45deg,transparent_25%,rgba(244,63,94,0.15)_50%,transparent_75%)] bg-[length:8px_8px]" />
+                <span className="relative z-10 truncate text-[8px]">⛔ MASKED &lt; {midiToNoteName(pitchRangeMinMidi)}</span>
+              </div>
+
+              {/* Active Allowed Vocal Corridor */}
+              <div 
+                className="h-full bg-emerald-950/60 border-y border-emerald-500/40 flex items-center justify-center text-emerald-300 font-bold px-2 grow transition-all shadow-[inset_0_0_12px_rgba(16,185,129,0.2)]"
+              >
+                <span className="truncate">✓ PASSBAND [{midiToNoteName(pitchRangeMinMidi)} - {midiToNoteName(pitchRangeMaxMidi)}]</span>
+              </div>
+
+              {/* Masked Upper Zone */}
+              <div 
+                className="h-full bg-rose-950/70 border-l border-rose-500/60 flex items-center justify-center text-rose-300/80 px-2 shrink-0 transition-all overflow-hidden relative"
+                style={{ width: `${Math.max(5, ((84 - pitchRangeMaxMidi) / (84 - 24)) * 100)}%` }}
+              >
+                <div className="absolute inset-0 bg-[linear-gradient(45deg,transparent_25%,rgba(244,63,94,0.15)_50%,transparent_75%)] bg-[length:8px_8px]" />
+                <span className="relative z-10 truncate text-[8px]">⛔ MASKED &gt; {midiToNoteName(pitchRangeMaxMidi)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Musical Presets & Glitch Simulation Test Trigger */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-rose-500/20 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] text-slate-400 font-mono">Registers:</span>
+              {[
+                { label: 'C2–C4 Baritone/Bass', min: 36, max: 60 },
+                { label: 'C3–G4 Tenor', min: 48, max: 67 },
+                { label: 'A3–E5 Mezzo', min: 57, max: 76 },
+                { label: 'C4–C6 Soprano', min: 60, max: 84 },
+                { label: 'E2–E4 Tight Dialogue', min: 40, max: 64 }
+              ].map(preset => {
+                const isActive = pitchRangeMinMidi === preset.min && pitchRangeMaxMidi === preset.max;
+                return (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      setPitchRangeMinMidi(preset.min);
+                      setPitchRangeMaxMidi(preset.max);
+                      showToast(`Applied ${preset.label} range filter`);
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-all border ${
+                      isActive
+                        ? 'bg-rose-500 text-white border-rose-400 font-bold shadow'
+                        : 'bg-black/30 text-rose-300/80 border-rose-500/30 hover:border-rose-400 hover:text-white'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+
+              <button
+                onClick={() => setIsPitchPresetSidebarOpen(true)}
+                className="px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-all border bg-indigo-950/40 text-indigo-300 border-indigo-500/40 hover:bg-indigo-900/60 hover:text-white flex items-center gap-1"
+                title="Manage Character Pitch Presets & Octave Sensitivity"
+              >
+                <Bookmark className="w-2.5 h-2.5 text-indigo-400" />
+                <span>Character Presets ➔</span>
+              </button>
+            </div>
+
+            {/* Test Octave Glitch Toggle Button */}
+            <button
+              onClick={() => {
+                const nextState = !simulateOctaveGlitch;
+                setSimulateOctaveGlitch(nextState);
+                if (nextState) {
+                  showToast('⚡ Injected simulated octave-leap artifact (+1200¢ / doubling)');
+                } else {
+                  showToast('Simulation cleared: normal pitch tracking');
+                }
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-mono font-semibold transition-all cursor-pointer border ${
+                simulateOctaveGlitch
+                  ? 'bg-red-600 text-white border-red-400 shadow-[0_0_12px_rgba(239,68,68,0.5)] animate-pulse'
+                  : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-rose-500/60 hover:text-rose-300'
+              }`}
+              title="Test octave jump / doubling artifact injection to verify visual masking"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-300" />
+              <span>{simulateOctaveGlitch ? '⚡ Octave Glitch Active' : '⚡ Test Octave Glitch'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Selected Take Card Banner */}
       <div className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
@@ -698,11 +1439,26 @@ function RealtimeFrequencyVisualizer({
         </div>
 
         {/* Live Spectrum Telemetry Badges */}
-        <div className="flex items-center gap-3 font-mono text-[11px] shrink-0">
+        <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] shrink-0">
           <div className="text-right">
             <span className="opacity-60 block text-[9px] uppercase">Pitch (F0)</span>
             <span className="font-bold text-cyan-400">{liveMetrics.fundamentalHz} Hz ({liveMetrics.musicalNote})</span>
           </div>
+          {showPitchOverlay && (
+            <div className="text-right">
+              <span className="opacity-60 block text-[9px] uppercase text-emerald-400">F0 Stability</span>
+              <span className="font-bold text-emerald-400">±{pitchToleranceCents}¢ (98.4%)</span>
+            </div>
+          )}
+          {enablePitchRangeFilter && (
+            <div className="text-right">
+              <span className="opacity-60 block text-[9px] uppercase text-rose-400">Range Mask</span>
+              <span className="font-bold text-rose-400">
+                {midiToNoteName(pitchRangeMinMidi)}–{midiToNoteName(pitchRangeMaxMidi)}
+                {octaveLeapsCount > 0 && <span className="ml-1 text-red-400">({octaveLeapsCount})</span>}
+              </span>
+            </div>
+          )}
           <div className="text-right">
             <span className="opacity-60 block text-[9px] uppercase">Centroid</span>
             <span className="font-bold text-indigo-400">{liveMetrics.centroidHz} Hz</span>
@@ -835,6 +1591,49 @@ function RealtimeFrequencyVisualizer({
           </button>
         </div>
       </div>
+
+      {/* Pitch Preset Manager Sidebar within Pitch Tracker Overlay */}
+      <PitchPresetManager
+        isOpen={isPitchPresetSidebarOpen}
+        onClose={() => setIsPitchPresetSidebarOpen(false)}
+        activePresetId={activePitchPresetId}
+        onSelectPreset={(preset) => {
+          setActivePitchPresetId(preset.id);
+          setActivePitchPresetName(preset.name);
+          setPitchRangeMinMidi(preset.minMidi);
+          setPitchRangeMaxMidi(preset.maxMidi);
+          setPitchToleranceCents(preset.octaveLeapSettings.toleranceCents);
+          setOctaveLeapSettings(preset.octaveLeapSettings);
+        }}
+        currentMinMidi={pitchRangeMinMidi}
+        currentMaxMidi={pitchRangeMaxMidi}
+        currentToleranceCents={pitchToleranceCents}
+        onUpdateRangeAndTolerance={(minMidi, maxMidi, toleranceCents) => {
+          setPitchRangeMinMidi(minMidi);
+          setPitchRangeMaxMidi(maxMidi);
+          setPitchToleranceCents(toleranceCents);
+        }}
+        octaveLeapsCount={octaveLeapsCount}
+        onResetLeapsCount={() => {
+          setOctaveLeapsCount(0);
+          showToast('Octave leap counter reset to 0');
+        }}
+        simulateOctaveGlitch={simulateOctaveGlitch}
+        onToggleSimulateOctaveGlitch={() => {
+          const nextState = !simulateOctaveGlitch;
+          setSimulateOctaveGlitch(nextState);
+          if (nextState) {
+            showToast('⚡ Injected simulated octave-leap artifact (+1200¢ / doubling)');
+          } else {
+            showToast('Simulation cleared: normal pitch tracking');
+          }
+        }}
+        themeMode={themeMode}
+        showToast={showToast}
+        onOctaveLeapSettingsChange={(settings) => {
+          setOctaveLeapSettings(settings);
+        }}
+      />
     </div>
   );
 }
@@ -842,6 +1641,19 @@ function RealtimeFrequencyVisualizer({
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('chat-studio');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarVisible, setIsSidebarVisible] = useState(true);
+
+  // Keyboard shortcut (Ctrl+B or Cmd+B) to quickly toggle sidebar visibility (Grok style)
+  useEffect(() => {
+    const handleToggleSidebarKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setIsSidebarVisible(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleToggleSidebarKey);
+    return () => window.removeEventListener('keydown', handleToggleSidebarKey);
+  }, []);
   const [copiedScript, setCopiedScript] = useState(false);
 
   // Appearance & Accessibility State
@@ -918,12 +1730,26 @@ export default function App() {
   const [lastUploadedAsset, setLastUploadedAsset] = useState<string | null>(null);
   const [isPushingToUnreal, setIsPushingToUnreal] = useState(false);
   const [sortOption, setSortOption] = useState<'date-desc' | 'date-asc' | 'name-asc' | 'name-desc' | 'size-desc' | 'size-asc'>('date-desc');
-  const [notebookFilter, setNotebookFilter] = useState<'All' | 'Audio' | 'Code' | 'Document' | 'Specs'>('All');
+  const [notebookFilter, setNotebookFilter] = useState<'All' | '3D Assets' | 'Audio' | 'Video' | 'Code' | 'Textures' | 'Document' | 'Archives' | 'Specs'>('All');
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [activePlayingAudioId, setActivePlayingAudioId] = useState<string | null>(null);
   const [activeTranscriptionText, setActiveTranscriptionText] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+
+  // Universal File Upload States Across Tabs (All file formats accepted: */*)
+  const [chatAttachedFiles, setChatAttachedFiles] = useState<File[]>([]);
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const voiceFileInputRef = useRef<HTMLInputElement>(null);
+  const vaultFileInputRef = useRef<HTMLInputElement>(null);
+  const [customVaultFiles, setCustomVaultFiles] = useState<Array<{
+    id: string;
+    name: string;
+    format: string;
+    sizeKB: number;
+    category: string;
+    date: string;
+  }>>([]);
 
   // Tool & Model Vault State (API Key Generator & Mobile Sync)
   const [vaultSubTab, setVaultSubTab] = useState<'inventory' | 'api-keys' | 'mobile-companion' | 'suggestions'>('inventory');
@@ -1698,9 +2524,144 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const handleChatFileAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const newFiles = Array.from(e.target.files);
+      setChatAttachedFiles(prev => [...prev, ...newFiles]);
+      showToast(`Attached ${newFiles.length} file(s) to prompt (${newFiles.map(f => f.name).join(', ')})`);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleRemoveChatAttachedFile = (index: number) => {
+    setChatAttachedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Helper: Classify any file format (*/*) for the Project Notebook
+  const classifyFileToNotebook = (file: File): NotebookFile => {
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    let category: NotebookFile['category'] = 'Document';
+    let isAudio = false;
+
+    if (['fbx', 'obj', 'gltf', 'glb', 'usd', 'usdc', 'usda', 'blend', 'dae', 'stl', 'ply', 'splat'].includes(ext)) {
+      category = '3D Assets';
+    } else if (['wav', 'mp3', 'ogg', 'flac', 'aac', 'm4a', 'aiff'].includes(ext) || file.type.includes('audio')) {
+      category = 'Audio';
+      isAudio = true;
+    } else if (['mp4', 'webm', 'mov', 'avi', 'mkv', 'wmv'].includes(ext) || file.type.includes('video')) {
+      category = 'Video';
+    } else if (['py', 'cpp', 'c', 'h', 'hpp', 'cs', 'ts', 'tsx', 'js', 'jsx', 'uasset', 'umap', 'json', 'yaml', 'yml', 'toml', 'sh', 'bat', 'ps1', 'rs', 'go'].includes(ext)) {
+      category = 'Code';
+    } else if (['png', 'jpg', 'jpeg', 'exr', 'hdr', 'tga', 'webp', 'svg', 'bmp', 'tiff'].includes(ext) || file.type.includes('image')) {
+      category = 'Textures';
+    } else if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext)) {
+      category = 'Archives';
+    } else if (['pdf', 'docx', 'doc', 'md', 'txt', 'rtf', 'csv'].includes(ext)) {
+      category = 'Document';
+    }
+
+    return {
+      id: `file-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      name: file.name,
+      category,
+      fileSizeKB: Math.round(file.size / 1024),
+      dateAdded: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      timestampMs: Date.now(),
+      summary: `Uploaded ${category} asset to active workspace. Accepts all file types.`,
+      isTranscribed: false,
+      audioDuration: isAudio ? '1:02' : undefined,
+      transcription: isAudio ? `[Auto-Transcribed from ${file.name}]: Spoken game design guidelines verified by LMM auditor.` : undefined
+    };
+  };
+
+  // Universal File Import Handler for Voice & Audio Studio
+  const handleVoiceFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
+      files.forEach(file => {
+        const ext = file.name.split('.').pop()?.toLowerCase() || '';
+        if (['wav', 'mp3', 'ogg', 'flac', 'm4a', 'aac'].includes(ext) || file.type.includes('audio')) {
+          const newTake = {
+            id: `imported-take-${Date.now()}-${Math.random()}`,
+            name: file.name,
+            actor: 'External Audio Import (48kHz)',
+            duration: `${Math.max(1.5, Math.round(file.size / 150000)).toFixed(1)}s`,
+            date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: `[Imported Track]: Audio waveform loaded from ${file.name}`,
+            vramUsedMB: Math.round(file.size / (1024 * 1024) * 10) || 120,
+            room: 'Dry Studio',
+            pitch: 0,
+            speed: 1.0
+          };
+          setVoiceTakes(prev => [newTake, ...prev]);
+          setSelectedTakeIdForEditor(newTake.id);
+          showToast(`✓ Imported audio file "${file.name}" into Voice Takes!`);
+        } else if (['txt', 'md', 'json', 'py', 'csv'].includes(ext)) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const content = event.target?.result as string;
+            if (content) {
+              setVoiceScriptText(content.slice(0, 1000));
+              showToast(`✓ Script loaded into Voice Studio from "${file.name}"!`);
+            }
+          };
+          reader.readAsText(file);
+        } else {
+          const genericTake = {
+            id: `imported-file-${Date.now()}-${Math.random()}`,
+            name: file.name,
+            actor: `External File [${ext.toUpperCase()}]`,
+            duration: '0.0s',
+            date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: `[Imported Source Asset]: Staged for voice soundtrack sync from ${file.name}`,
+            vramUsedMB: Math.round(file.size / (1024 * 1024)) || 50,
+            room: 'Dry Studio',
+            pitch: 0,
+            speed: 1.0
+          };
+          setVoiceTakes(prev => [genericTake, ...prev]);
+          showToast(`✓ Staged external asset "${file.name}" in Audio Studio!`);
+        }
+      });
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  // Universal File Import Handler for Asset Vault
+  const handleVaultFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
+      const newItems = files.map(f => {
+        const ext = f.name.split('.').pop()?.toUpperCase() || 'BIN';
+        let cat = 'Document';
+        if (['FBX', 'OBJ', 'GLTF', 'GLB', 'USD', 'BLEND'].includes(ext)) cat = '3D Asset';
+        else if (['WAV', 'MP3', 'OGG', 'FLAC'].includes(ext)) cat = 'Audio Track';
+        else if (['MP4', 'MOV', 'WEBM'].includes(ext)) cat = 'Video Clip';
+        else if (['PY', 'CPP', 'H', 'CS', 'UASSET'].includes(ext)) cat = 'Engine Code';
+        else if (['ZIP', 'RAR', '7Z', 'TAR'].includes(ext)) cat = 'Package Archive';
+        else if (['PNG', 'JPG', 'EXR', 'HDR'].includes(ext)) cat = 'Texture / LUT';
+        return {
+          id: `vault-custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          name: f.name,
+          format: ext,
+          sizeKB: Math.round(f.size / 1024),
+          category: cat,
+          date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+      });
+      setCustomVaultFiles(prev => [...newItems, ...prev]);
+      showToast(`✓ Stored ${newItems.length} file(s) into Vault! (Accepts all formats)`);
+      if (e.target) e.target.value = '';
+    }
+  };
+
   // Handle Send Prompt
   const handleSendPrompt = (customText?: string) => {
-    const textToSend = customText || inputPrompt;
+    let textToSend = customText || inputPrompt;
+    if (chatAttachedFiles.length > 0 && !customText) {
+      const filesSummary = chatAttachedFiles.map(f => `[Attached File: ${f.name} (${Math.round(f.size/1024)} KB)]`).join('\n');
+      textToSend = `${filesSummary}\n\n${textToSend.trim() || 'Please process and ground this request with the attached files.'}`;
+    }
     if (!textToSend.trim()) return;
 
     const userMsg: ChatMessage = {
@@ -1716,6 +2677,7 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
     }));
 
     setInputPrompt('');
+    setChatAttachedFiles([]);
     setIsGenerating(true);
 
     setTimeout(() => {
@@ -2009,30 +2971,16 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
       return 0;
     });
 
-  // Handle Drag & Drop File Upload
+  // Handle Drag & Drop File Upload (Accepts all file types: */*)
   const handleDropFiles = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDraggingOver(false);
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const dropped = Array.from(e.dataTransfer.files);
-      const newItems: NotebookFile[] = dropped.map(file => {
-        const isAudio = file.type.includes('audio') || file.name.endsWith('.wav') || file.name.endsWith('.mp3');
-        return {
-          id: `file-${Date.now()}-${Math.random()}`,
-          name: file.name,
-          category: isAudio ? 'Audio' : file.name.endsWith('.py') || file.name.endsWith('.cpp') ? 'Code' : 'Document',
-          fileSizeKB: Math.round(file.size / 1024),
-          dateAdded: new Date().toISOString().slice(0, 16).replace('T', ' '),
-          timestampMs: Date.now(),
-          summary: `Uploaded file to active workspace.`,
-          isTranscribed: false,
-          audioDuration: isAudio ? '1:02' : undefined,
-          transcription: isAudio ? `[Auto-Transcribed from ${file.name}]: Spoken game design guidelines verified by LMM auditor.` : undefined
-        };
-      });
-
+      const newItems: NotebookFile[] = dropped.map(file => classifyFileToNotebook(file));
       setNotebookFiles(prev => [...newItems, ...prev]);
+      showToast(`✓ Grounded ${newItems.length} file(s) into Project Notebook! (${newItems.map(f => `${f.name} [${f.category}]`).join(', ')})`);
     }
   };
 
@@ -2081,46 +3029,62 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
     >
       
       {/* =========================================================================
-          LEFT SIDEBAR (User-Friendly Navigation)
+          LEFT SIDEBAR (GROK BOT STYLE - FULLY HIDEABLE VIA BUTTON & CTRL+B)
           ========================================================================= */}
       <aside 
         className={`flex flex-col border-r transition-all duration-300 z-30 shrink-0 ${
+          !isSidebarVisible 
+            ? 'w-0 -ml-72 opacity-0 overflow-hidden pointer-events-none' 
+            : isSidebarCollapsed 
+            ? 'w-18 opacity-100' 
+            : 'w-72 opacity-100'
+        } ${
           themeMode === 'light' 
             ? 'border-slate-300 bg-white shadow-md' 
-            : 'border-slate-800/80 bg-[#10131e]'
-        } ${isSidebarCollapsed ? 'w-18' : 'w-72'}`}
+            : 'border-white/10 bg-[#06080e]'
+        }`}
       >
         {/* Brand & Studio Logo */}
-        <div className={`flex items-center justify-between p-4 border-b ${
-          themeMode === 'light' ? 'border-slate-200' : 'border-slate-800/60'
+        <div className={`flex items-center justify-between p-3.5 border-b ${
+          themeMode === 'light' ? 'border-slate-200' : 'border-white/10'
         }`}>
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl overflow-hidden bg-slate-950 border border-cyan-500/40 shadow-lg shadow-cyan-500/25 shrink-0">
+            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl overflow-hidden bg-black border border-cyan-500/40 shadow-lg shadow-cyan-500/25 shrink-0">
               <img 
                 src="/logo.jpg" 
                 alt="Dev Studio Logo" 
                 className="w-full h-full object-cover" 
               />
-              <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#10131e]" />
+              <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#06080e]" />
             </div>
             {!isSidebarCollapsed && (
               <div className="flex flex-col truncate">
-                <span className="text-sm font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-cyan-500 via-sky-400 to-indigo-400">
+                <span className="text-sm font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-sky-300 to-indigo-300 font-mono">
                   DEV STUDIO
                 </span>
-                <span className="text-[10px] font-medium tracking-wide uppercase opacity-70">
-                  Universal Game Studio
-                </span>
+                <div className="flex items-center gap-1.5 text-[10px] font-mono tracking-wide text-zinc-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                  <span>Grok Engine v1</span>
+                </div>
               </div>
             )}
           </div>
-          <button 
-            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-            className="p-1.5 rounded-lg opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
-            title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            <ChevronRight className={`w-4 h-4 transition-transform ${!isSidebarCollapsed ? 'rotate-180' : ''}`} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+              className="p-1.5 rounded-lg opacity-70 hover:opacity-100 hover:bg-white/5 transition-all cursor-pointer text-zinc-400"
+              title={isSidebarCollapsed ? "Expand sidebar" : "Compact sidebar"}
+            >
+              <ChevronRight className={`w-3.5 h-3.5 transition-transform ${!isSidebarCollapsed ? 'rotate-180' : ''}`} />
+            </button>
+            <button 
+              onClick={() => setIsSidebarVisible(false)}
+              className="p-1.5 rounded-lg opacity-70 hover:opacity-100 hover:bg-white/10 text-cyan-400 transition-all cursor-pointer"
+              title="Hide sidebar (Ctrl+B)"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* User-Friendly Project Space Selector */}
@@ -2172,20 +3136,24 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
           </div>
         )}
 
-        {/* User-Friendly Navigation Tabs - 7 Studio Menu Options */}
+        {/* Navigation Tabs - Grok Studio Architecture */}
         <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1 scrollbar-thin">
           {[
-            { id: 'chat-studio', label: '1. Chat & Studio', icon: Terminal, sub: 'Active Sessions, Studio Canvas, Model Control' },
-            { id: 'agent-creator', label: '2. Agent Creator', icon: Users, sub: 'Visual Builder, Agent Registry, OS Execution' },
-            { id: 'notebooks', label: '3. Knowledge Notebooks', icon: BookOpen, sub: 'Project Spaces, Vector Embeddings, Synthesis' },
-            { id: 'voice-audio', label: '4. Voice & Audio Acting', icon: Volume2, sub: 'Drama 3 Voice Acting, Audio Editor & Controls' },
-            { id: 'asset-vault', label: '5. Asset Library & Vault', icon: Box, sub: 'Prompts & Models, Secrets, Export Hub .exe' },
-            { id: 'docker-resources', label: '6. Docker Integration & Resources', icon: Server, sub: 'Node Manager, API Offload, VRAM Allocator' },
-            { id: 'system-settings', label: '7. System Settings', icon: Sliders, sub: 'Hardware & Paths, Auth & Email, Network' }
+            { id: 'chat-studio', label: '1. Chat & Studio', icon: Terminal, sub: 'Grok Reasoning, Models & Sessions' },
+            { id: 'cinematics', label: '2. Cinematics & Director', icon: Film, sub: 'Real-Time Camera Splines, 60fps Viewport' },
+            { id: 'musicgen', label: '3. Meta MusicGen Studio', icon: Music, sub: 'AudioCraft 10 Models & MBD Decoder' },
+            { id: 'agent-creator', label: '3. Agent Creator', icon: Users, sub: 'Visual Builder, 40-Agent Registry' },
+            { id: 'notebooks', label: '4. Knowledge Notebooks', icon: BookOpen, sub: 'Project Spaces & Vector Synthesis' },
+            { id: 'voice-audio', label: '5. Voice & Audio Acting', icon: Volume2, sub: 'Fish Drama 3 & F0 Pitch Tracker' },
+            { id: 'asset-vault', label: '6. Asset Library & Vault', icon: Box, sub: 'Logo, .ico Icon, Windows 11 Installers' },
+            { id: 'docker-resources', label: '7. Docker Integration & VRAM', icon: Server, sub: 'Node Manager & 6GB VRAM Limiter' },
+            { id: 'system-settings', label: '8. System Settings', icon: Sliders, sub: 'Hardware, Auth & Google Services' }
           ].map((item) => {
             const Icon = item.icon;
             const isActive = 
               (item.id === 'chat-studio' && (activeTab === 'chat-studio' || activeTab === 'studio')) ||
+              (item.id === 'cinematics' && (activeTab === 'cinematics' || activeTab === 'cinematic-studio')) ||
+              (item.id === 'musicgen' && (activeTab === 'musicgen' || activeTab === 'musicgen-studio')) ||
               (item.id === 'agent-creator' && (activeTab === 'agent-creator' || activeTab === 'agents')) ||
               (item.id === 'notebooks' && activeTab === 'notebooks') ||
               (item.id === 'voice-audio' && activeTab === 'voice-audio') ||
@@ -2462,6 +3430,14 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                   >
                     <Sliders className="w-3.5 h-3.5" />
                     <span>Model Control Panel</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('cinematics')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer opacity-70 hover:opacity-100 hover:text-cyan-300 text-zinc-300"
+                    title="Open 60 FPS Real-Time Cinematic Scene Studio & Director"
+                  >
+                    <Film className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Cinematic Director</span>
                   </button>
                 </div>
                 <div className="flex items-center gap-3 font-mono text-[11px] opacity-75">
@@ -2989,6 +3965,32 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                     </button>
                   </div>
 
+                  {/* Attached Files Chips Bar */}
+                  {chatAttachedFiles.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pb-2">
+                      <span className="text-[10px] font-mono text-cyan-400 font-semibold flex items-center gap-1">
+                        <Upload className="w-3 h-3" />
+                        <span>Attached ({chatAttachedFiles.length}):</span>
+                      </span>
+                      {chatAttachedFiles.map((f, i) => (
+                        <div
+                          key={i}
+                          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-mono bg-cyan-500/15 border border-cyan-500/30 text-cyan-300"
+                        >
+                          <span className="truncate max-w-[120px]">{f.name}</span>
+                          <span className="opacity-60 text-[8px] uppercase">({Math.round(f.size / 1024)}KB)</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveChatAttachedFile(i)}
+                            className="text-slate-400 hover:text-red-400 ml-0.5 cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <form 
                     onSubmit={(e) => {
                       e.preventDefault();
@@ -2997,11 +3999,27 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                     className="relative flex items-center"
                   >
                     <input
+                      ref={chatFileInputRef}
+                      type="file"
+                      multiple
+                      accept="*/*"
+                      className="hidden"
+                      onChange={handleChatFileAttach}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => chatFileInputRef.current?.click()}
+                      className="absolute left-2.5 p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
+                      title="Attach any file (*/*) - 3D models, audio, video, code, textures, documents"
+                    >
+                      <Upload className="w-4 h-4" />
+                    </button>
+                    <input
                       type="text"
                       value={inputPrompt}
                       onChange={(e) => setInputPrompt(e.target.value)}
-                      placeholder={`Ask Dev Studio (e.g. Write Python inventory system, relight level with IC-Light, or compute rain velocity)...`}
-                      className={`w-full pl-4 pr-12 py-3 border rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500 transition-all ${
+                      placeholder={chatAttachedFiles.length > 0 ? `Prompt agent with ${chatAttachedFiles.length} attached file(s)...` : `Ask Dev Studio or attach any file (*/*)...`}
+                      className={`w-full pl-10 pr-12 py-3 border rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500 transition-all ${
                         themeMode === 'light' 
                           ? 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400' 
                           : 'bg-[#080910] border-slate-800 text-slate-200 placeholder-slate-500'
@@ -3009,7 +4027,7 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                     />
                     <button
                       type="submit"
-                      disabled={isGenerating || !inputPrompt.trim()}
+                      disabled={isGenerating || (!inputPrompt.trim() && chatAttachedFiles.length === 0)}
                       className="absolute right-2 p-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-30 text-white transition-all cursor-pointer"
                     >
                       <Send className="w-4 h-4" />
@@ -3109,7 +4127,30 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
         </div>
       )}
 
-          {/* TAB 2: 2. AGENT CREATOR */}
+          {/* TAB 2: CINEMATICS & DIRECTOR STUDIO */}
+          {(activeTab === 'cinematics' || activeTab === 'cinematic-studio') && (
+            <CinematicDirectorStudio
+              themeMode={themeMode}
+              showToast={showToast}
+              onPushToUnreal={(assetName, code, lang) => {
+                showToast(`Pushed ${assetName} to Unreal Engine 5.5 bridge!`);
+              }}
+            />
+          )}
+
+          {/* TAB 3: META MUSICGEN STUDIO (AudioCraft v1.3.0) */}
+          {(activeTab === 'musicgen' || activeTab === 'musicgen-studio') && (
+            <MusicGenStudio
+              themeMode={themeMode}
+              showToast={showToast}
+              onSendToAudioVisualizer={(audioUrl: string, title: string) => {
+                showToast(`Loaded "${title}" into Audio Acting & Frequency Visualizer!`);
+                setActiveTab('voice-audio');
+              }}
+            />
+          )}
+
+          {/* TAB: 2. AGENT CREATOR */}
           {(activeTab === 'agent-creator' || activeTab === 'agents') && (
             <div className="h-full w-full p-6 overflow-y-auto space-y-6">
               
@@ -3659,23 +4700,23 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow cursor-pointer transition-colors">
+                  <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow cursor-pointer transition-colors" title="Upload any file format (*/*)">
                     <Upload className="w-3.5 h-3.5" />
-                    <span>Upload File</span>
-                    <input type="file" multiple onChange={(e) => {
-                      if (e.target.files) {
-                        const newF: NotebookFile[] = Array.from(e.target.files).map(f => ({
-                          id: `f-${Date.now()}-${Math.random()}`,
-                          name: f.name,
-                          category: f.name.endsWith('.py') ? 'Code' : f.name.endsWith('.wav') ? 'Audio' : 'Document',
-                          fileSizeKB: Math.round(f.size / 1024),
-                          dateAdded: new Date().toISOString().slice(0, 16).replace('T', ' '),
-                          timestampMs: Date.now(),
-                          summary: 'Uploaded file to active workspace.'
-                        }));
-                        setNotebookFiles(prev => [...newF, ...prev]);
-                      }
-                    }} className="hidden" />
+                    <span>Upload File (*/*)</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="*/*"
+                      onChange={(e) => {
+                        if (e.target.files) {
+                          const newF: NotebookFile[] = Array.from(e.target.files).map(f => classifyFileToNotebook(f));
+                          setNotebookFiles(prev => [...newF, ...prev]);
+                          showToast(`✓ Grounded ${newF.length} file(s) into Project Notebook!`);
+                          if (e.target) e.target.value = '';
+                        }
+                      }}
+                      className="hidden"
+                    />
                   </label>
 
                   <button
@@ -3712,9 +4753,9 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                 }`}
               >
                 <Upload className="w-8 h-8 text-cyan-500 mb-2 animate-bounce" />
-                <h3 className="text-sm font-bold">Drag and Drop Files into Project Notebook</h3>
+                <h3 className="text-sm font-bold">Drag and Drop ANY File Type (*/*) into Project Notebook</h3>
                 <p className="text-xs opacity-70 mt-1 max-w-md">
-                  Drop code files (.py, .cpp), audio files (.wav, .mp3), design specs (.docx, .pdf), or markdown notes to ground all 40 agents.
+                  Accepts all file types: 3D (.fbx, .obj, .gltf, .blend), Video (.mp4, .mov), Audio (.wav, .mp3, .flac), Code (.py, .cpp, .uasset), Textures (.png, .exr), Archives (.zip), and Docs.
                 </p>
               </div>
 
@@ -3845,12 +4886,12 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
 
               {/* Filter and Sort Toolbar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
-                <div className="flex items-center gap-1.5 overflow-x-auto text-xs pb-1">
-                  {(['All', 'Audio', 'Code', 'Document', 'Specs'] as const).map(cat => (
+                <div className="flex items-center gap-1.5 overflow-x-auto text-xs pb-1 scrollbar-thin">
+                  {(['All', '3D Assets', 'Audio', 'Video', 'Code', 'Textures', 'Document', 'Archives', 'Specs'] as const).map(cat => (
                     <button
                       key={cat}
                       onClick={() => setNotebookFilter(cat)}
-                      className={`px-3 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors ${
+                      className={`px-3 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors shrink-0 ${
                         notebookFilter === cat 
                           ? 'bg-cyan-600 text-white' 
                           : 'bg-slate-500/10 opacity-70 hover:opacity-100'
@@ -4056,6 +5097,25 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                     }`}
                   >
                     Takes Library ({voiceTakes.length})
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={voiceFileInputRef}
+                    type="file"
+                    multiple
+                    accept="*/*"
+                    className="hidden"
+                    onChange={handleVoiceFileImport}
+                  />
+                  <button
+                    onClick={() => voiceFileInputRef.current?.click()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 font-semibold text-xs cursor-pointer transition-all shadow-sm"
+                    title="Import any file format (*/*) - Audio (.wav, .mp3, .flac), Scripts (.txt, .md, .py), or Take Assets"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Import Audio / Script (*/*)</span>
                   </button>
                 </div>
               </div>
@@ -4465,7 +5525,54 @@ normal_map = model.extract_normals_from_quad_relight("asset_hero.png")`
                     Export Hub & .exe Packaging
                   </button>
                 </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={vaultFileInputRef}
+                    type="file"
+                    multiple
+                    accept="*/*"
+                    className="hidden"
+                    onChange={handleVaultFileImport}
+                  />
+                  <button
+                    onClick={() => vaultFileInputRef.current?.click()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs cursor-pointer transition-all shadow-sm"
+                    title="Upload any file (*/*) into the Asset Vault"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Import File to Vault (*/*)</span>
+                  </button>
+                </div>
               </div>
+
+              {/* Custom Uploaded Vault Files Banner */}
+              {customVaultFiles.length > 0 && (
+                <div className={`p-4 rounded-xl border space-y-2 ${
+                  themeMode === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-900/60 border-slate-800'
+                }`}>
+                  <div className="flex items-center justify-between text-xs font-bold text-cyan-400">
+                    <span className="flex items-center gap-1.5">
+                      <Box className="w-4 h-4" />
+                      Uploaded Vault Assets ({customVaultFiles.length})
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-400">All Formats Accepted (*/*)</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                    {customVaultFiles.map(vf => (
+                      <div key={vf.id} className="p-2.5 rounded-lg border border-white/5 bg-black/20 text-xs flex items-center justify-between">
+                        <div className="truncate mr-2">
+                          <p className="font-bold truncate">{vf.name}</p>
+                          <p className="text-[10px] opacity-60 font-mono">{vf.category} • {vf.sizeKB} KB</p>
+                        </div>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase bg-cyan-500/20 text-cyan-300">
+                          {vf.format}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* SUB-VIEW 1: SECRETS VAULT & API KEY GENERATOR */}
               {(assetVaultSubTab === 'secrets-vault' || vaultSubTab === 'api-keys') && (

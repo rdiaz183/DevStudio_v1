@@ -18,18 +18,38 @@
   letter-spacing: 0.02em !important;
 }
 
-/* Scrollbar tweaks */
+/* Grok & Grok Bot Design Constitution */
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #04060a;
+  color: #f1f5f9;
+  overflow: hidden;
+}
+
+/* Scrollbar tweaks (Grok Minimalist) */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgba(6, 182, 212, 0.4);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.15s ease-out forwards;
 }
